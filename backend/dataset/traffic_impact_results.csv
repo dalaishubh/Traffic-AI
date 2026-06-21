@@ -1,0 +1,18 @@
+junction,impact_percent,risk_score_v2,impact_delay,risk_delay,delay_minutes,severity
+MekhriCircle,100,70.15625,25.0,24.5546875,49.6,Critical
+SadashivnagarJunc,70,14.101562500000002,17.5,4.935546875,22.4,High
+YeshwanthpuraCircle,20,49.424342105263165,5.0,17.298519736842106,22.3,High
+HebbalFlyoverJunc,20,46.16071428571429,5.0,16.15625,21.2,High
+BhashyamCircle-SadashivNagar,70,0.625,17.5,0.21875,17.7,Medium
+CIL CrossJunction-JayamahalRd,70,0.625,17.5,0.21875,17.7,Medium
+TataInstituteCircle,40,19.625,10.0,6.8687499999999995,16.9,Medium
+"PriyadarshiniHotel,Jayamahal,RT Nagar",40,2.90625,10.0,1.0171875,11.0,Medium
+MargosaRd-18thCrossJunc,40,1.40625,10.0,0.49218749999999994,10.5,Medium
+MS RamaiahJunc(TollGate),20,15.726562500000002,5.0,5.5042968750000005,10.5,Medium
+Malleswaram18thCrossRd-SampigeRdJunc,40,0.9765625,10.0,0.341796875,10.3,Medium
+Geethanjali jn,40,0.15625,10.0,0.0546875,10.1,Medium
+MSRamaiahHospitalJunc,40,0.0390625,10.0,0.013671875,10.0,Low
+ChaudrayaCircle/UdayaTVCircle(CantonmentJunc),20,1.9140625,5.0,0.669921875,5.7,Low
+KCG HospitalJunction,20,1.65625,5.0,0.5796874999999999,5.6,Low
+ChandrikaJunction,20,1.65625,5.0,0.5796874999999999,5.6,Low
+ISRO Junction-NewBEL Rd,20,0.0390625,5.0,0.013671875,5.0,Low

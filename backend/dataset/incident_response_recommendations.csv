@@ -1,0 +1,18 @@
+junction,impact_percent,risk_score_v2,impact_delay,risk_delay,delay_minutes,severity,primary_police_station,police_station,workload_score,deployment_rank,response_priority,incident_rank
+MekhriCircle,100,70.15625,25.0,24.5546875,49.6,Critical,Sadashivanagar,Sadashivanagar,214.4,52,0.23026926648096566,1
+HebbalFlyoverJunc,20,46.16071428571429,5.0,16.15625,21.2,High,Hebbala,Hebbala,96.5,32,0.21743589743589742,2
+CIL CrossJunction-JayamahalRd,70,0.625,17.5,0.21875,17.7,Medium,R.T. Nagar,R.T. Nagar,91.2,29,0.19197396963123642,3
+MargosaRd-18thCrossJunc,40,1.40625,10.0,0.4921874999999999,10.5,Medium,Malleshwaram,Malleshwaram,59.3,12,0.17412935323383086,4
+Malleswaram18thCrossRd-SampigeRdJunc,40,0.9765625,10.0,0.341796875,10.3,Medium,Malleshwaram,Malleshwaram,59.3,12,0.17081260364842457,5
+Geethanjali jn,40,0.15625,10.0,0.0546875,10.1,Medium,Malleshwaram,Malleshwaram,59.3,12,0.16749585406301826,6
+"PriyadarshiniHotel,Jayamahal,RT Nagar",40,2.90625,10.0,1.0171875,11.0,Medium,R.T. Nagar,R.T. Nagar,91.2,29,0.11930585683297179,7
+YeshwanthpuraCircle,20,49.424342105263165,5.0,17.298519736842106,22.3,High,Yeshwanthpura,Yeshwanthpura,198.7,49,0.11166750125187783,8
+SadashivnagarJunc,70,14.101562500000002,17.5,4.935546875,22.4,High,Sadashivanagar,Sadashivanagar,214.4,52,0.10399257195914577,9
+KCG HospitalJunction,20,1.65625,5.0,0.5796874999999999,5.6,Low,Malleshwaram,Malleshwaram,59.3,12,0.09286898839137644,10
+BhashyamCircle-SadashivNagar,70,0.625,17.5,0.21875,17.7,Medium,Sadashivanagar,Sadashivanagar,214.4,52,0.08217270194986072,11
+TataInstituteCircle,40,19.625,10.0,6.86875,16.9,Medium,Sadashivanagar,Sadashivanagar,214.4,52,0.07845868152274836,12
+MS RamaiahJunc(TollGate),20,15.726562500000002,5.0,5.5042968750000005,10.5,Medium,Yeshwanthpura,Yeshwanthpura,198.7,49,0.05257886830245368,13
+MSRamaiahHospitalJunc,40,0.0390625,10.0,0.013671875,10.0,Low,Sadashivanagar,Sadashivanagar,214.4,52,0.04642525533890436,14
+ChaudrayaCircle/UdayaTVCircle(CantonmentJunc),20,1.9140625,5.0,0.669921875,5.7,Low,High ground,High ground,133.4,39,0.04241071428571429,15
+ChandrikaJunction,20,1.65625,5.0,0.5796874999999999,5.6,Low,High ground,High ground,133.4,39,0.041666666666666664,16
+ISRO Junction-NewBEL Rd,20,0.0390625,5.0,0.013671875,5.0,Low,Sadashivanagar,Sadashivanagar,214.4,52,0.02321262766945218,17

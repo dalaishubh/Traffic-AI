@@ -1,0 +1,5 @@
+destination,entry_point,route_length,route
+HebbalFlyoverJunc,SadashivnagarJunc,3,SadashivnagarJunc -> MSRamaiahHospitalJunc -> HebbalFlyoverJunc
+MSRamaiahHospitalJunc,SadashivnagarJunc,2,SadashivnagarJunc -> MSRamaiahHospitalJunc
+SadashivnagarJunc,SadashivnagarJunc,1,SadashivnagarJunc
+TataInstituteCircle,SadashivnagarJunc,2,SadashivnagarJunc -> TataInstituteCircle

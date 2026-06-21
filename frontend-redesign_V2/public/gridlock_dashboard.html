@@ -1,0 +1,581 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GRIDLOCK Operations Dashboard</title>
+
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          Segoe UI,
+          Arial,
+          sans-serif;
+        background: #111827;
+        color: #fff;
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      .sidebar {
+        order: 2;
+        width: 100%;
+        background: #1f2937;
+        padding: 16px;
+        border-top: 1px solid #374151;
+        display: flex;
+        flex-direction: row;
+        gap: 16px;
+        overflow-x: auto;
+        align-items: stretch;
+      }
+      .sidebar h2 {
+        display: none;
+      }
+      .map-wrap {
+        order: 1;
+        flex: 1;
+        min-height: 400px;
+        position: relative;
+      }
+      #map {
+        height: 100%;
+        width: 100%;
+      }
+      h2,
+      h3 {
+        margin: 0 0 10px;
+      }
+      .card {
+        background: #111827;
+        border: 1px solid #374151;
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 0;
+        min-width: 240px;
+        flex-shrink: 0;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .kpi {
+        background: #0f172a;
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #334155;
+      }
+      .kpi .v {
+        font-size: 22px;
+        font-weight: bold;
+      }
+      .gauge {
+        height: 18px;
+        background: #374151;
+        border-radius: 20px;
+        overflow: hidden;
+      }
+      .gauge-fill {
+        height: 100%;
+        width: 100%;
+        background: #dc2626;
+        transition: width 0.5s ease;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 6px;
+        border-bottom: 1px solid #374151;
+        text-align: left;
+      }
+      .badge {
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: #991b1b;
+      }
+      .banner {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 1000;
+        background: #b91c1c;
+        color: #fff;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-weight: bold;
+      }
+      
+      /* Pulse Animation Keyframes */
+      @keyframes pulse-red {
+        0% { transform: scale(0.7); opacity: 1; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+        70% { transform: scale(1.1); opacity: 0.9; box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+        100% { transform: scale(0.7); opacity: 0; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+      }
+      @keyframes pulse-orange {
+        0% { transform: scale(0.7); opacity: 1; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.7); }
+        70% { transform: scale(1.1); opacity: 0.9; box-shadow: 0 0 0 10px rgba(249, 115, 22, 0); }
+        100% { transform: scale(0.7); opacity: 0; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
+      }
+      @keyframes pulse-yellow {
+        0% { transform: scale(0.7); opacity: 1; box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); }
+        70% { transform: scale(1.1); opacity: 0.9; box-shadow: 0 0 0 10px rgba(234, 179, 8, 0); }
+        100% { transform: scale(0.7); opacity: 0; box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); }
+      }
+      @keyframes pulse-blue {
+        0% { transform: scale(0.7); opacity: 1; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+        70% { transform: scale(1.1); opacity: 0.9; box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); }
+        100% { transform: scale(0.7); opacity: 0; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+      }
+      
+      .pulse-red {
+        width: 14px;
+        height: 14px;
+        background: #ef4444;
+        border-radius: 50%;
+        animation: pulse-red 1.2s infinite;
+        border: 2px solid #fff;
+      }
+      .pulse-orange {
+        width: 14px;
+        height: 14px;
+        background: #f97316;
+        border-radius: 50%;
+        animation: pulse-orange 1.2s infinite;
+        border: 2px solid #fff;
+      }
+      .pulse-yellow {
+        width: 14px;
+        height: 14px;
+        background: #eab308;
+        border-radius: 50%;
+        animation: pulse-yellow 1.2s infinite;
+        border: 2px solid #fff;
+      }
+      .pulse-blue {
+        width: 14px;
+        height: 14px;
+        background: #3b82f6;
+        border-radius: 50%;
+        animation: pulse-blue 1.2s infinite;
+        border: 2px solid #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="sidebar">
+        <h2>🚨 GRIDLOCK</h2>
+
+        <div class="card">
+          <h3>Incident Summary</h3>
+          <p>
+            <b>Event:</b>
+            <span id="eventType"></span>
+          </p>
+          <span class="badge" id="riskBadge"> </span>
+          <p>
+            <b>Score:</b>
+            <span id="score"></span>
+          </p>
+          <p>
+            <b>Duration:</b>
+            <span id="duration"></span>
+          </p>
+          <p>
+            <b>Clearance:</b>
+            <span id="clearance"></span>
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>KPI Cards</h3>
+          <div class="kpis" id="kpiContainer"></div>
+        </div>
+
+        <div class="card">
+          <h3>Risk Score</h3>
+          <div class="gauge">
+            <div class="gauge-fill" id="riskGauge"></div>
+          </div>
+          <p id="riskScoreText"></p>
+        </div>
+
+        <div class="card">
+          <h3>Diversion Recommendations</h3>
+          <ul id="diversionList"></ul>
+        </div>
+
+        <div class="card">
+          <h3>Affected Corridors</h3>
+          <table>
+            <tr>
+              <th>Corridor</th>
+              <th>Delay</th>
+            </tr>
+            <tbody id="corridorTable"></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h3>OpenRouteService</h3>
+          <p>Key Configuration Loaded</p>
+        </div>
+      </div>
+
+      <div class="map-wrap">
+        <div class="banner" id="incidentBanner">Loading Simulation...</div>
+        <div id="map"></div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+      const urlParams = new URLSearchParams(window.location.search);
+      const ORS_API_KEY = urlParams.get("ors_key") || "";
+      const hideSidebar = urlParams.get("hide_sidebar") === "true";
+
+      if (hideSidebar) {
+        const style = document.createElement("style");
+        style.innerHTML = ".sidebar { display: none !important; }";
+        document.head.appendChild(style);
+      }
+
+      let data = null;
+
+      const map = L.map("map");
+
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap",
+      }).addTo(map);
+
+      const staticLayerGroup = L.layerGroup().addTo(map);
+      const replayLayerGroup = L.layerGroup().addTo(map);
+      let propagationCircle = null;
+
+      function reSub(s) {
+        return String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+      }
+
+      async function loadForecast() {
+        const formDataStr = localStorage.getItem("forecast_form_data");
+        if (!formDataStr) {
+          console.error("No forecast form data found in localStorage.");
+          document.getElementById("incidentBanner").innerText = "ERROR: No simulation inputs found. Run a forecast first.";
+          return;
+        }
+
+        try {
+          const formData = JSON.parse(formDataStr);
+          const response = await fetch("http://localhost:8000/forecast", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(formData)
+          });
+
+          if (!response.ok) {
+            throw new Error(`API error: ${response.statusText}`);
+          }
+
+          data = await response.json();
+          renderDashboard(data);
+        } catch (err) {
+          console.error("Failed to load forecast data:", err);
+          document.getElementById("incidentBanner").innerText = "CONNECTION FAILURE: Simulation engine offline.";
+        }
+      }
+      
+      function renderDashboard(data) {
+        const bounds = [];
+        document.getElementById("riskScoreText").innerText =
+          `Score: ${data.score} / 100`;
+        document.getElementById("incidentBanner").innerText =
+          `${data.risk.toUpperCase()} INCIDENT • ${data.event_type.replace('_', ' ').toUpperCase()} • Delay ${
+            data.traffic_clearance_min
+          } mins`;
+        document.getElementById("riskGauge").style.width = data.score + "%";
+        document.getElementById("clearance").innerText =
+          data.traffic_clearance_min + " Minutes";
+        document.getElementById("duration").innerText =
+          data.event_duration_hours + " Hours";
+        document.getElementById("eventType").innerText = data.event_type.replace('_', ' ').toUpperCase();
+
+        document.getElementById("score").innerText = data.score;
+
+        document.getElementById("riskBadge").innerText = data.risk;
+
+        document.getElementById("kpiContainer").innerHTML = `<div class="kpi">
+<div>Affected</div>
+<div class="v">
+${data.affected_corridors.length}
+</div>
+</div>
+
+<div class="kpi">
+<div>Max Delay</div>
+<div class="v">
+${Math.max(...data.affected_corridors.map((x) => x.delay_min))}m
+</div>
+</div>
+
+<div class="kpi">
+<div>Officers</div>
+<div class="v">
+${data.officers}
+</div>
+</div>
+
+<div class="kpi">
+<div>Barricades</div>
+<div class="v">
+${data.barricades}
+</div>
+</div>
+`;
+        document.getElementById("diversionList").innerHTML =
+          data.diversion_routes
+            .map(
+              (r) => `<li>${r.route_name}
+ - ${r.corridor}</li>`,
+            )
+            .join("");
+
+        document.getElementById("corridorTable").innerHTML =
+          data.affected_corridors
+            .map(
+              (c) => `
+<tr>
+<td>${c.corridor}</td>
+<td>${c.delay_min}m</td>
+</tr>
+`,
+            )
+            .join("");
+
+        // Clear any old static layers first
+        staticLayerGroup.clearLayers();
+
+        L.marker([
+          data.incident_location.latitude,
+          data.incident_location.longitude,
+        ])
+          .addTo(staticLayerGroup)
+          .bindPopup("🚨 Incident Origin");
+
+        bounds.push([
+          data.incident_location.latitude,
+          data.incident_location.longitude,
+        ]);
+
+        data.affected_corridors.forEach((c) => {
+          bounds.push([c.latitude, c.longitude]);
+
+          L.circleMarker([c.latitude, c.longitude], {
+            radius: 10 + c.impact_pct * 0.25,
+            color: color(c.impact_pct),
+            fillColor: color(c.impact_pct),
+            fillOpacity: 0.8,
+          })
+            .addTo(staticLayerGroup)
+            .bindTooltip(
+              `
+        ${c.corridor}
+        <br>
+        ${c.delay_min} min
+        `,
+              {
+                permanent: true,
+                direction: "top",
+              },
+            );
+        });
+
+        data.diversion_routes.forEach((route) => {
+          bounds.push([route.latitude, route.longitude]);
+
+          L.marker([route.latitude, route.longitude])
+            .addTo(staticLayerGroup)
+            .bindPopup(route.route_name + "<br>" + route.corridor);
+        });
+
+        (async () => {
+          for (const route of data.diversion_routes) {
+            await drawRoadRoute(data.incident_location, route, "blue");
+          }
+        })();
+
+        map.fitBounds(bounds, {
+          padding: [50, 50],
+        });
+
+        (async () => {
+          const c = data.affected_corridors;
+
+          for (let i = 0; i < c.length - 1; i++) {
+            await drawRoadRoute(c[i], c[i + 1], color(c[i].impact_pct));
+          }
+        })();
+      }
+
+      function color(i) {
+        if (i >= 80) return "red";
+        if (i >= 60) return "orange";
+        if (i >= 30) return "yellow";
+        return "green";
+      }
+
+      async function drawRoadRoute(start, end, lineColor) {
+        if (!ORS_API_KEY || ORS_API_KEY.includes("PASTE")) return;
+
+        try {
+          const res = await fetch(
+            "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+            {
+              method: "POST",
+              headers: {
+                Authorization: ORS_API_KEY,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                coordinates: [
+                  [start.longitude, start.latitude],
+                  [end.longitude, end.latitude],
+                ],
+              }),
+            },
+          );
+
+          const geo = await res.json();
+
+          const route = geo.features[0].geometry.coordinates.map((p) => [
+            p[1],
+            p[0],
+          ]);
+
+          L.polyline(route, {
+            color: lineColor,
+            weight: 6,
+            opacity: 0.85,
+          }).addTo(staticLayerGroup);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      // Replay Logic
+      function updateReplayMap(minute, timeline) {
+        // Clear replay layers
+        replayLayerGroup.clearLayers();
+        if (propagationCircle) {
+          map.removeLayer(propagationCircle);
+          propagationCircle = null;
+        }
+
+        if (!data || !timeline) return;
+
+        // Clear static overlay so only the animated timeline active elements show
+        staticLayerGroup.clearLayers();
+
+        // 1. Draw expanding congestion wave around origin
+        const minutes = timeline.map(item => item.minute);
+        const idx = minutes.indexOf(minute);
+        let radius = 100;
+        if (idx === 1) radius = 500;
+        else if (idx === 2) radius = 1000;
+        else if (idx === 3) radius = 1500;
+        else if (idx === 4) radius = 2000;
+
+        propagationCircle = L.circle([
+          data.incident_location.latitude,
+          data.incident_location.longitude
+        ], {
+          radius: radius,
+          color: "#06b6d4",
+          fillColor: "#06b6d4",
+          fillOpacity: 0.08,
+          weight: 2,
+          dashArray: "5 5"
+        }).addTo(map);
+
+        // 2. Filter timeline items occurring up to the selected minute
+        const activeStages = timeline.filter(item => item.minute <= minute);
+
+        activeStages.forEach(stage => {
+          // Resolve coordinates
+          let coords = null;
+          if (reSub(stage.corridor) === reSub(data.incident_location.corridor)) {
+            coords = { lat: data.incident_location.latitude, lng: data.incident_location.longitude };
+          } else {
+            const match = data.affected_corridors.find(
+              c => reSub(c.corridor) === reSub(stage.corridor)
+            );
+            if (match) {
+              coords = { lat: match.latitude, lng: match.longitude };
+            }
+          }
+
+          if (!coords) {
+            // Fallback coordinate offset
+            coords = {
+              lat: data.incident_location.latitude + (Math.random() - 0.5) * 0.015,
+              lng: data.incident_location.longitude + (Math.random() - 0.5) * 0.015
+            };
+          }
+
+          // Render pulse animation marker based on impact_pct
+          const pct = stage.impact_pct;
+          const pClass = pct > 80 ? 'pulse-red' : pct > 50 ? 'pulse-orange' : pct > 20 ? 'pulse-yellow' : 'pulse-blue';
+          
+          const pulseIcon = L.divIcon({
+            className: '',
+            html: `<div class="${pClass}"></div>`,
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
+          });
+
+          L.marker([coords.lat, coords.lng], { icon: pulseIcon })
+            .addTo(replayLayerGroup)
+            .bindTooltip(`<b>${stage.title}</b><br>${stage.corridor} (${pct}% impact)`, {
+              permanent: true,
+              direction: "top"
+            });
+        });
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "REPLAY_UPDATE") {
+          const { minute, timeline } = event.data;
+          updateReplayMap(minute, timeline);
+        } else if (event.data && event.data.type === "REPLAY_RESET") {
+          replayLayerGroup.clearLayers();
+          if (propagationCircle) {
+            map.removeLayer(propagationCircle);
+            propagationCircle = null;
+          }
+          if (data) {
+            renderDashboard(data);
+          }
+        }
+      });
+
+      loadForecast();
+    </script>
+  </body>
+</html>
