@@ -46,7 +46,7 @@ import sys
 try:
     lib_path = Path(__file__).resolve().parent.parent.parent / "lib" / "libomp.dylib"
     if lib_path.exists():
-        ctypes.CDLL(str(lib_path))
+        ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
 except Exception as e:
     print(f"Could not dynamically load libomp: {e}", file=sys.stderr)
 
@@ -696,6 +696,13 @@ def forecast_event(event_type, attendance, duration_hours, corridor, junction,
         "delay": delay,
         "event_duration_hours": duration_hours,
         "traffic_clearance_min": delay,
+        "delay_breakdown": {
+            "base": 5,
+            "crowd_impact": round(attendance / 500, 1),
+            "duration_impact": duration_hours * 2,
+            "closure_impact": 10 if road_closure else 0,
+            "congestion_impact": round(score * 0.2, 1)
+        },
         "officers": officers_required(score, attendance, event_type),
         "barricades": barricades_required(score, attendance, road_closure, severity),
         "diversion_routes": diversion_plan(score, corridor),

@@ -28,6 +28,10 @@ def forecast(data: ForecastRequest):
     # Attach strategy advice
     result["strategy"] = generate_strategy(result)
 
+    # Store it in the bot instance so the chatbot is aware of the active dashboard simulation
+    from app.services.chatbot import bot
+    bot.set_active_simulation(result)
+
     return result
 
 
@@ -44,14 +48,3 @@ def get_junctions():
 @router.get("/junctions/live")
 def get_live_junctions():
     return junction_nodes
-
-
-class ChatRequest(BaseModel):
-    message: str
-
-
-@router.post("/chat")
-def chat_endpoint(data: ChatRequest):
-    from app.services.chatbot import bot
-    answer = bot.chat(data.message)
-    return {"answer": answer}

@@ -151,25 +151,96 @@ DATASET_HINTS = [
 
 FORECAST_PARAM_ORDER = list(inspect.signature(forecast_event).parameters.keys())
 
+KANNADA_HINTS = [
+    "kannada", "ಕನ್ನಡ", "kannadalli", "kannada nalli", "kannadda",
+    "speak kannada", "in kannada", "respond in kannada",
+]
+
+COMPARISON_HINTS = [
+    "compare", "vs", "versus", "difference between", "which is worse",
+    "which is riskier", "better than", "compared to",
+]
+
+RESOURCE_PLANNING_HINTS = [
+    "only have", "limited officers", "limited barricades", "prioritize",
+    "which should i", "can't cover all", "not enough officers",
+    "budget of", "available officers",
+]
+
+BRIEFING_HINTS = [
+    "daily briefing", "today's risk", "todays risk", "morning briefing",
+    "risk summary", "give me a briefing", "watch out for",
+    "overview of risk", "risk overview", "briefing",
+]
+
+def _detect_language_request(text: str) -> str | None:
+    t = text.lower()
+    return "kannada" if any(h in t for h in KANNADA_HINTS) else None
+
+def _looks_like_comparison(text: str) -> bool:
+    t = text.lower()
+    return any(h in t for h in COMPARISON_HINTS)
+
+def _looks_like_resource_planning(text: str) -> bool:
+    t = text.lower()
+    return any(h in t for h in RESOURCE_PLANNING_HINTS)
+
+def _looks_like_briefing_request(text: str) -> bool:
+    t = text.lower()
+    if any(h in t for h in BRIEFING_HINTS):
+        return True
+    time_words = ["today", "morning", "daily"]
+    risk_words = ["risk", "briefing", "summary", "rundown", "overview"]
+    return any(tw in t for tw in time_words) and any(rw in t for rw in risk_words)
+
+MULTI_FORECAST_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "forecast_multiple_events",
+        "description": (
+            "Run the traffic forecasting engine for TWO OR MORE events at "
+            "once, for comparison or resource-prioritization questions. "
+            "Each event uses the exact same fields as forecast_event."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "events": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": FORECAST_TOOL["function"]["parameters"],
+                    "description": "One entry per event being compared.",
+                },
+            },
+            "required": ["events"],
+        },
+    },
+}
+
 class TrafficChatbot:
     def __init__(self, api_key: str):
         self.client = None
         self.history = []
+        self._force_kannada = False
+        self.active_simulation = None
         if api_key:
             try:
                 self.client = Groq(api_key=api_key)
             except Exception as e:
                 print(f"Error initializing Groq client: {e}")
 
-    def _call_llm(self, messages, use_tools: bool, force: bool = False):
+    def set_active_simulation(self, simulation_data: dict):
+        self.active_simulation = simulation_data
+
+    def _call_llm(self, messages, use_tools: bool, force: bool = False, multiple: bool = False):
         kwargs = dict(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=messages,
             temperature=0.3,
             max_tokens=1024,
         )
         if use_tools:
-            kwargs["tools"] = [FORECAST_TOOL]
+            kwargs["tools"] = [MULTI_FORECAST_TOOL] if multiple else [FORECAST_TOOL]
             kwargs["tool_choice"] = "required" if force else "auto"
         return self.client.chat.completions.create(**kwargs)
 
@@ -219,64 +290,333 @@ class TrafficChatbot:
         result["strategy"] = generate_strategy(result)
         return result
 
+    def _run_multi_forecast(self, events: list) -> list:
+        return [self._run_forecast(e) for e in events]
+
     def _format_result(self, result: dict) -> str:
-        n_roads = len(result["affected_corridors"])
+        event_name = result.get('event_type', '').replace('_', ' ').title()
+        risk_level = result.get('risk', 'Unknown')
+        score = int(round(result.get('score', 0)))
+        clearance_time = result.get('traffic_clearance_min', 0)
+        officers = result.get('officers', 0)
+        barricades = result.get('barricades', 0)
+        
+        corridors = [c.get('corridor') for c in result.get('affected_corridors', []) if c.get('corridor')]
+        corridor_bullets = "\n".join([f"• {c}" for c in corridors]) if corridors else "• None"
+        
+        output = f"""🚨 EVENT IMPACT FORECAST
+
+Event
+{event_name}
+
+Risk
+{risk_level} ({score}/100)
+
+Clearance Time
+{clearance_time} min
+
+Resources
+{officers} Officers
+{barricades} Barricades
+
+Affected Corridors
+{corridor_bullets}"""
+        return output
+
+    def _format_comparison(self, label_a: str, result_a: dict, label_b: str, result_b: dict) -> str:
+        def delta(a, b):
+            d = round(b - a, 1)
+            sign = "+" if d > 0 else ""
+            return f"{sign}{d}"
+
         lines = [
-            f"{'='*52}",
-            "  EVENT IMPACT FORECAST & STRATEGY PLAN",
-            f"{'='*52}",
-            f"  Event          : {result['event_type'].replace('_', ' ').title()}",
-            f"  Congestion     : {result['score']} / 100  [{result['risk']}]",
-            f"  Clearance time : {result['traffic_clearance_min']} minutes",
-            f"  Officers       : {result['officers']}",
-            f"  Barricades     : {result['barricades']}",
-            f"  Roads affected : {n_roads}",
-            "",
-            "  AFFECTED CORRIDORS:",
+            f"{'='*58}",
+            "  SCENARIO COMPARISON",
+            f"{'='*58}",
+            f"  {'Metric':<22}{label_a:>15}{label_b:>15}{'Delta':>8}",
+            f"  {'-'*58}",
+            f"  {'Risk score':<22}{result_a['score']:>15}{result_b['score']:>15}{delta(result_a['score'], result_b['score']):>8}",
+            f"  {'Risk level':<22}{result_a['risk']:>15}{result_b['risk']:>15}",
+            f"  {'Clearance (min)':<22}{result_a['traffic_clearance_min']:>15}{result_b['traffic_clearance_min']:>15}"
+            f"{delta(result_a['traffic_clearance_min'], result_b['traffic_clearance_min']):>8}",
+            f"  {'Officers':<22}{result_a['officers']:>15}{result_b['officers']:>15}"
+            f"{delta(result_a['officers'], result_b['officers']):>8}",
+            f"  {'Barricades':<22}{result_a['barricades']:>15}{result_b['barricades']:>15}"
+            f"{delta(result_a['barricades'], result_b['barricades']):>8}",
+            f"  {'Roads affected':<22}{len(result_a['affected_corridors']):>15}{len(result_b['affected_corridors']):>15}",
+            f"{'='*58}",
         ]
-        for c in result["affected_corridors"]:
-            lines.append(
-                f"    {c['corridor']:<25} -> {c['delay_min']} min "
-                f"({c['impact_pct']}% impact) [{c['risk_level']}]"
-            )
-        if result["diversion_routes"]:
-            lines.append("")
-            lines.append("  DIVERSION ROUTES:")
-            for r in result["diversion_routes"]:
-                lines.append(f"    {r.get('route_name')}: {r.get('corridor')}")
-
-        if "strategy" in result:
-            strategy = result["strategy"]
-            lines.append("")
-            lines.append("  RECOMMENDED STRATEGY PLAN:")
-            lines.append(f"    Priority Level       : {strategy.get('priority')}")
-            lines.append(f"    Expected Reduction   : {strategy.get('estimated_improvement')}")
-            lines.append("    Recommended Actions:")
-            for act in strategy.get("actions", []):
-                lines.append(f"      - {act}")
-            lines.append("    Resource Deployment:")
-            for dep in strategy.get("deployment_plan", []):
-                lines.append(f"      - {dep}")
-
-        lines.append(f"{'='*52}")
         return "\n".join(lines)
 
-    def chat(self, user_message: str) -> str:
+    def _language_instruction(self) -> str:
+        if getattr(self, "_force_kannada", False):
+            return (
+                " Respond in Kannada (ಕನ್ನಡ script), written naturally as a "
+                "Bengaluru traffic officer would read it. Keep numbers, "
+                "corridor names, and junction names in their original "
+                "English/Latin form since those must match dataset records "
+                "exactly — only the surrounding sentences should be Kannada."
+            )
+        return ""
+
+    def chat_comparison(self, user_message: str) -> str:
         if not self.client:
-            return "Sorry, the chatbot service is currently unavailable because the Groq API key is not configured. Please set GROQ_API_KEY in your .env file."
+            return "Groq client is not initialized."
         self.history.append({"role": "user", "content": user_message})
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
 
         try:
-            response = self._call_llm(messages, use_tools=True)
+            response = self._call_llm(messages, use_tools=True, multiple=True)
+            msg = response.choices[0].message
+        except Exception as e:
+            return f"Error calling LLM: {e}"
+
+        if not msg.tool_calls:
+            fallback = "I couldn't extract two comparable events from that — try naming both events explicitly, e.g. 'compare a political rally with 5000 people at Mysore Road vs a protest at MekhriCircle.'"
+            self.history.append({"role": "assistant", "content": fallback})
+            return fallback
+
+        try:
+            args = json.loads(msg.tool_calls[0].function.arguments)
+            events = args["events"][:2]
+        except (json.JSONDecodeError, KeyError, IndexError):
+            fallback = "I had trouble parsing the two events to compare — could you restate them one at a time?"
+            self.history.append({"role": "assistant", "content": fallback})
+            return fallback
+
+        results = self._run_multi_forecast(events)
+        formatted_a = self._format_result(results[0]).replace("🚨 EVENT IMPACT FORECAST", "🚨 EVENT IMPACT FORECAST (SCENARIO A)")
+        formatted_b = self._format_result(results[1]).replace("🚨 EVENT IMPACT FORECAST", "🚨 EVENT IMPACT FORECAST (SCENARIO B)")
+        
+        label_a = events[0].get("event_type", "Scenario A").replace("_", " ").title()
+        label_b = events[1].get("event_type", "Scenario B").replace("_", " ").title()
+        diff_table = self._format_comparison(label_a, results[0], label_b, results[1])
+
+        narration_prompt = (
+            f"Here is a side-by-side comparison from forecast_event():\n"
+            f"Scenario A data:\n```json\n{json.dumps(results[0], indent=2)}\n```\n\n"
+            f"Scenario B data:\n```json\n{json.dumps(results[1], indent=2)}\n```\n\n"
+            f"Please write a comprehensive, professional, and detailed operations comparison/explanation. "
+            "You must address the following five areas explicitly:\n"
+            "1. **Explainable Delay Prediction**: Differentiate how the delays are calculated/broken down between the two scenarios (referencing the `delay_breakdown` field in both JSONs).\n"
+            "2. **Historical Evidence for Corridor Selection**: Detail why these corridors/junctions were selected as affected, referencing the historical risk levels or closure rates from the context database.\n"
+            "3. **AI Confidence Scores**: State the AI confidence percentage for both predictions and compare their reliability.\n"
+            "4. **Command-Center Recommendations**: Outline the comparative priorities, recommended actions, deployment strategy, and expected improvements for both cases.\n"
+            "5. **Resource Planning**: Advise how operators should budget/deploy resources between the two scenarios."
+        )
+        try:
+            explanation_resp = self.client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": "You are a concise traffic operations advisor. Reply professionally and in detail, in the SAME language the user used in their last message." + self._language_instruction()},
+                    {"role": "user", "content": narration_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=600,
+            )
+            explanation = explanation_resp.choices[0].message.content
+        except Exception as e:
+            explanation = f"Error generating comparison explanation: {e}"
+
+        final = f"{formatted_a}\n\n{formatted_b}\n\n{diff_table}\n\n{explanation}"
+        self.history.append({"role": "assistant", "content": final})
+        return final
+
+    def chat_resource_planning(self, user_message: str) -> str:
+        if not self.client:
+            return "Groq client is not initialized."
+        self.history.append({"role": "user", "content": user_message})
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+
+        try:
+            response = self._call_llm(messages, use_tools=True, multiple=True)
+            msg = response.choices[0].message
+        except Exception as e:
+            return f"Error calling LLM: {e}"
+
+        if not msg.tool_calls:
+            fallback = "Tell me the events you're choosing between (type, crowd size, location) and how many officers/barricades you have available."
+            self.history.append({"role": "assistant", "content": fallback})
+            return fallback
+
+        try:
+            args = json.loads(msg.tool_calls[0].function.arguments)
+            events = args["events"]
+        except (json.JSONDecodeError, KeyError):
+            fallback = "I had trouble parsing the events — could you list them one at a time?"
+            self.history.append({"role": "assistant", "content": fallback})
+            return fallback
+
+        cap_match = re.search(r"(\d+)\s*officers?", user_message, re.IGNORECASE)
+        officer_cap = int(cap_match.group(1)) if cap_match else None
+        
+        barricade_match = re.search(r"(\d+)\s*barricades?", user_message, re.IGNORECASE)
+        barricade_cap = int(barricade_match.group(1)) if barricade_match else None
+
+        results = self._run_multi_forecast(events)
+        
+        formatted_events = []
+        for idx, res in enumerate(results, 1):
+            formatted_event = self._format_result(res).replace("🚨 EVENT IMPACT FORECAST", f"🚨 EVENT IMPACT FORECAST (EVENT #{idx})")
+            formatted_events.append(formatted_event)
+
+        labeled = [
+            {"label": e.get("event_type", f"Event {i+1}").replace("_", " ").title(), **r}
+            for i, (e, r) in enumerate(zip(events, results))
+        ]
+        # Rank by risk score, highest first — greedy allocation against cap
+        labeled.sort(key=lambda x: x["score"], reverse=True)
+
+        lines = [f"{'='*58}", "  RESOURCE-CONSTRAINED PRIORITIZATION", f"{'='*58}"]
+        if officer_cap:
+            lines.append(f"  Officer budget: {officer_cap}")
+        if barricade_cap:
+            lines.append(f"  Barricade budget: {barricade_cap}")
+        lines.append("")
+
+        running_officers = 0
+        running_barricades = 0
+        for rank, ev in enumerate(labeled, 1):
+            running_officers += ev["officers"]
+            running_barricades += ev["barricades"]
+            
+            fits_officers = (officer_cap is None or running_officers <= officer_cap)
+            fits_barricades = (barricade_cap is None or running_barricades <= barricade_cap)
+            fits = "FITS BUDGET" if (fits_officers and fits_barricades) else "OVER BUDGET"
+            
+            lines.append(
+                f"  #{rank} {ev['label']:<20} score={ev['score']:<6} "
+                f"officers={ev['officers']:<4} barricades={ev['barricades']:<4} [{fits}]"
+            )
+        lines.append(f"{'='*58}")
+        plan_table = "\n".join(lines)
+
+        narration_prompt = (
+            f"Here is a resource-constrained prioritization table:\n```\n{plan_table}\n```\n\n"
+            f"Event details:\n```json\n{json.dumps(results, indent=2)}\n```\n\n"
+            f"Please write a comprehensive, professional, and detailed resource planning explanation. "
+            "You must address the following five areas explicitly:\n"
+            "1. **Resource-Constrained Planning**: Explain which event(s) fit within the user's specified budget and which are over-budget, giving a clear prioritization sequence.\n"
+            "2. **Explainable Delay Prediction**: Detail the delay breakdown for the top-priority event (base delay, crowd size, duration, road closure, and congestion score impacts from the `delay_breakdown` field in the JSON).\n"
+            "3. **Historical Evidence for Corridor Selection**: Detail why those corridors were selected as affected, referencing the historical risk levels or closure rates from the context database.\n"
+            "4. **AI Confidence Scores**: State the AI confidence percentage for the predictions and compare their reliability.\n"
+            "5. **Command-Center Recommendations**: Outline the recommended priority level, mitigation actions, and expected delay reduction for the events."
+        )
+        try:
+            explanation_resp = self.client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": "You are a concise traffic operations advisor. Reply professionally and in detail, in the SAME language the user used in their last message." + self._language_instruction()},
+                    {"role": "user", "content": narration_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=600,
+            )
+            explanation = explanation_resp.choices[0].message.content
+        except Exception as e:
+            explanation = f"Error generating resource explanation: {e}"
+
+        formatted_events_str = "\n\n".join(formatted_events)
+        final = f"{formatted_events_str}\n\n{plan_table}\n\n{explanation}"
+        self.history.append({"role": "assistant", "content": final})
+        return final
+
+    def chat_briefing(self, hour_window: tuple[int, int] | None = None) -> str:
+        if not self.client:
+            return "Groq client is not initialized."
+        top_corridors = list(TRAFFIC_CONTEXT["top_corridors"].items())[:3]
+        top_junctions = list(TRAFFIC_CONTEXT["top_junctions"].items())[:3]
+        peak_hours = TRAFFIC_CONTEXT["peak_hours"]
+
+        window_note = ""
+        if hour_window:
+            start, end = hour_window
+            hours_in_window = [h for h in range(start, end + 1) if h in peak_hours]
+            window_note = f"\nRequested window {start}:00-{end}:00 overlaps peak hours: {hours_in_window or 'none'}"
+
+        briefing_data = (
+            f"Top 3 highest-risk corridors today: {top_corridors}\n"
+            f"Top 3 highest-risk junctions today: {top_junctions}\n"
+            f"City-wide peak risk hours: {peak_hours}"
+            f"{window_note}"
+        )
+
+        prompt = (
+            f"Using ONLY this real historical risk data:\n{briefing_data}\n\n"
+            f"Write a 4-line morning briefing for a traffic control room duty "
+            f"officer. Line 1: greeting + date context. Line 2: top risk "
+            f"corridors to watch. Line 3: top risk junctions. Line 4: peak "
+            f"hours to pre-position resources. Plain text, no markdown."
+        )
+        try:
+            response = self.client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": "You are a traffic control room briefing assistant. Be direct and operational." + self._language_instruction()},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=300,
+            )
+            briefing = response.choices[0].message.content
+        except Exception as e:
+            briefing = f"Error generating briefing: {e}"
+        self.history.append({"role": "assistant", "content": briefing})
+        return briefing
+
+    def _refers_to_active_simulation(self, text: str) -> bool:
+        if not self.active_simulation:
+            return False
+        t = text.lower()
+        new_event_keywords = [
+            "rally", "protest", "procession", "vip", "construction", 
+            "accident", "breakdown", "water logging", "pothole"
+        ]
+        active_type = self.active_simulation.get("event_type", "").lower().replace("_", " ")
+        for k in new_event_keywords:
+            if k in t and k not in active_type:
+                return False
+                
+        indicators = [
+            "this", "current", "dashboard", "active", "simulation", 
+            "shown", "display", "now", "here", "above", "result", "forecast",
+            "officer", "barricade", "delay", "corridor", "recommendation",
+            "priority", "action", "strategy", "clearance"
+        ]
+        return any(ind in t for ind in indicators)
+
+    def _chat_single(self, user_message: str) -> str:
+        print("ACTIVE SIMULATION STATE:", self.active_simulation)
+        self.history.append({"role": "user", "content": user_message})
+        
+        system_content = SYSTEM_PROMPT
+        if self.active_simulation:
+            system_content += f"\n\nACTIVE DASHBOARD SIMULATION RESULT:\n"
+            system_content += f"```json\n{json.dumps(self.active_simulation, indent=2)}\n```\n"
+            system_content += (
+                "\nCRITICAL: The user has currently run the above simulation on their dashboard. "
+                "If the user asks questions referring to 'this event', 'the simulation', 'the dashboard forecast', "
+                "or asks about officers, barricades, delays, or corridors for the active scenario, "
+                "you MUST answer using these exact numbers. DO NOT propose a new tool call to `forecast_event` "
+                "unless they ask for a new, different hypothetical scenario. Answer their questions directly "
+                "based on the active dashboard simulation data."
+            )
+
+        messages = [{"role": "system", "content": system_content}] + self.history
+        print("MESSAGES SENT TO LLM:", json.dumps(messages, indent=2))
+
+        use_tools = True
+        if self._refers_to_active_simulation(user_message):
+            use_tools = False
+
+        try:
+            response = self._call_llm(messages, use_tools=use_tools)
             msg = response.choices[0].message
         except Exception as e:
             print(f"Error calling LLM: {e}")
-            # Try a model fallback just in case
             try:
-                # Fallback to llama if qwen-2.5-32b has any issues
                 kwargs = dict(
-                    model="llama-3.3-70b-versatile",
+                    model="llama-3.1-8b-instant",
                     messages=messages,
                     temperature=0.3,
                     max_tokens=1024,
@@ -286,48 +626,50 @@ class TrafficChatbot:
             except Exception as inner_e:
                 return f"Sorry, I encountered an API error: {inner_e}"
 
-        params = self._params_from_tool_call(msg) or self._params_from_text_call(msg.content or "")
+        params = None
+        if use_tools:
+            params = self._params_from_tool_call(msg) or self._params_from_text_call(msg.content or "")
 
-        if params is None and not self._looks_like_dataset_question(user_message):
-            try:
-                response = self._call_llm(messages, use_tools=True, force=True)
-                msg = response.choices[0].message
-                params = self._params_from_tool_call(msg) or self._params_from_text_call(msg.content or "")
-            except Exception:
-                pass
+            if params is None and not self._looks_like_dataset_question(user_message):
+                try:
+                    response = self._call_llm(messages, use_tools=True, force=True)
+                    msg = response.choices[0].message
+                    params = self._params_from_tool_call(msg) or self._params_from_text_call(msg.content or "")
+                except Exception:
+                    pass
 
         if params is not None:
             result = self._run_forecast(params)
             formatted = self._format_result(result)
 
             self.history.append({"role": "assistant", "content": ""})
+            
+            explanation_prompt = (
+                "Here is the REAL forecast_event() output — the only numbers you're allowed to use:\n"
+                f"```json\n{json.dumps(result, indent=2)}\n```\n\n"
+                "Please write a comprehensive, professional, and detailed operations briefing/explanation. "
+                "You must address the following five areas explicitly:\n"
+                "1. **Explainable Delay Prediction**: Explain exactly how the delay is calculated and broken down (using the base delay, crowd size, duration, road closure, and congestion score impacts from the `delay_breakdown` field in the JSON).\n"
+                "2. **Historical Evidence for Corridor Selection**: Detail why this corridor and adjacent corridors were selected, referencing the historical risk levels or closure rates from the context database.\n"
+                "3. **AI Confidence Scores**: State the AI confidence percentage (found in the `confidence` / `ml_risk_confidence` or `ml_closure_probability` fields in the JSON) and what it means for prediction reliability.\n"
+                "4. **Command-Center Recommendations**: Outline the operational priority level, recommended mitigation actions, resource deployment plan, and estimated improvement percentage based on the strategy recommendations.\n"
+                "5. **Resource Planning**: Provide insights on how these resources compare to typical operations and tips for resource management."
+            )
+
             self.history.append({
                 "role": "user",
-                "content": (
-                    "Here is the REAL forecast_event() output — the only "
-                    "numbers you're allowed to use:\n"
-                    f"```json\n{json.dumps(result, indent=2)}\n```\n\n"
-                    "Using ONLY these numbers and strategy recommendations (do not invent, round, or add "
-                    "any new figures), give your assessment as 5 short "
-                    "bullet points, each under 25 words:\n"
-                    "- Congestion risk level and primary reason\n"
-                    "- Recommended priority level and expected delay reduction\n"
-                    "- Recommended operational actions to take\n"
-                    "- Resource deployment (officers and barricades plan)\n"
-                    "- How many roads/corridors are affected and the diversion routes to activate"
-                ),
+                "content": explanation_prompt,
             })
 
             try:
                 explanation_resp = self._call_llm(
-                    [{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                    [{"role": "system", "content": system_content + self._language_instruction()}] + self.history,
                     use_tools=False,
                 )
                 explanation = explanation_resp.choices[0].message.content
             except Exception as e:
-                explanation = "Calculations completed successfully. Please check the summary block above."
+                explanation = f"Calculations completed successfully. Please check the summary block above. Error details: {e}"
 
-            # clean history
             if len(self.history) >= 2:
                 self.history.pop()
                 self.history.pop()
@@ -341,8 +683,36 @@ class TrafficChatbot:
             self.history.append({"role": "assistant", "content": content})
             return content
 
+    def chat(self, user_message: str) -> str:
+        if not self.client:
+            return "Sorry, the chatbot service is currently unavailable because the Groq API key is not configured. Please set GROQ_API_KEY in your .env file."
+        
+        lang = _detect_language_request(user_message)
+        if lang == "kannada":
+            self._force_kannada = True
+            confirm = (
+                "Sari, ee mele ella forecast explanations Kannada-nalli "
+                "kodthini. (Got it — I'll explain forecasts in Kannada from "
+                "now on. The numbers themselves never change, only the "
+                "language of the explanation.)"
+            )
+            self.history.append({"role": "assistant", "content": confirm})
+            return confirm
+
+        if _looks_like_briefing_request(user_message):
+            return self.chat_briefing()
+
+        if _looks_like_comparison(user_message):
+            return self.chat_comparison(user_message)
+
+        if _looks_like_resource_planning(user_message):
+            return self.chat_resource_planning(user_message)
+
+        return self._chat_single(user_message)
+
     def reset(self):
         self.history = []
+        self._force_kannada = False
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 bot = TrafficChatbot(api_key=GROQ_API_KEY)

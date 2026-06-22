@@ -1,344 +1,420 @@
+# ═══════════════════════════════════════════════════════════
+# CHATBOT UPGRADE — 4 new capabilities beyond forecast_event() wrapping
+#
+# Paste these as NEW cells after your existing Cell D (TrafficChatbot
+# class). They extend the same class — nothing in Cell B/C/D needs to
+# change, and your existing forecast/dataset-question behavior is
+# untouched.
+#
+# What's new and WHY each one is a genuine upgrade, not just more code:
+#
+# 1. COMPARISON MODE
+#    "Compare this rally vs last week's protest at MekhriCircle"
+#    -> calls forecast_event() TWICE, diffs the real fields (officers,
+#    score, clearance, affected corridor count), explains the delta.
+#    A dashboard form can't do this — it only ever shows one forecast
+#    at a time. This is the single most defensible "why do we need an
+#    LLM at all" answer you can give judges.
+#
+# 2. PROACTIVE DAILY RISK BRIEFING
+#    Bot can be asked (or scheduled) to scan TRAFFIC_CONTEXT and
+#    volunteer top-3 highest-risk corridors/junctions for a given hour
+#    window WITHOUT the user specifying a hypothetical event. Turns
+#    the bot from reactive Q&A into something an ops desk would
+#    actually open every morning.
+#
+# 3. RESOURCE-CONSTRAINED PLANNING
+#    "I only have 6 officers available today, which 2 of these 3
+#    events should I prioritize?" — ranks multiple real forecasts
+#    against a hard resource cap. Genuinely different question type,
+#    not covered by your existing DATASET_HINTS or forecast intent.
+#
+# 4. MULTILINGUAL / KANNADA SUPPORT
+#    Same forecast_event() numbers, explanation text in Kannada
+#    (or Kanglish) on request. The LLM never computes anything either
+#    way, so this is purely a presentation-language switch — zero risk
+#    to forecast accuracy.
+# ═══════════════════════════════════════════════════════════
 
 
-import os
-import json
-from groq import Groq
-from dotenv import load_dotenv
+# ── CELL F: Language detection + comparison/resource intent hints ──
 
-load_dotenv()
-# ── CELL B: Build context dict from existing lookups ────
-# Everything here already exists in your notebook —
-# we just pack it into one dict to pass to the LLM
-
-hour_risk        = df.groupby("event_hour")["road_closure"].mean()
-temporal_mult    = (hour_risk / hour_risk.mean()).round(3).to_dict()
-data_peak_hours  = hour_risk[hour_risk > hour_risk.quantile(0.75)].index.tolist()
-
-df["closed_datetime"] = pd.to_datetime(
-    df["closed_datetime"], format="mixed", utc=True, errors="coerce"
-)
-_closed = df[df["closed_datetime"].notna()].copy()
-_closed["resolution_hours"] = (
-    (_closed["closed_datetime"] - _closed["start_datetime"]).dt.total_seconds() / 3600
-)
-_closed = _closed[(_closed["resolution_hours"] > 0) & (_closed["resolution_hours"] < 500)]
-resolution_times = _closed.groupby("event_cause")["resolution_hours"].median().round(1).to_dict()
-
-zone_summary = df.groupby("zone").agg(
-    total=("id", "count"),
-    closures=("road_closure", "sum"),
-    high_priority=("priority", lambda x: (x == "High").mean())
-)
-zone_summary["closure_rate"]    = zone_summary["closures"] / zone_summary["total"]
-zone_summary["zone_risk_score"] = (
-    0.6 * zone_summary["closure_rate"] + 0.4 * zone_summary["high_priority"]
-).round(3)
-
-# Sorted so the FIRST item is always the highest — the chatbot can just
-# read off index 0 instead of guessing.
-zone_risk_sorted     = zone_summary["zone_risk_score"].sort_values(ascending=False).round(3).to_dict()
-zone_closures_sorted = zone_summary["closures"].sort_values(ascending=False).to_dict()
-
-# corridor_risk_lookup / junction_risk_lookup were already built sorted
-# descending earlier in the notebook (cells 3 & 4), so top_corridors /
-# top_junctions below are already "highest risk first".
-TRAFFIC_CONTEXT = {
-    "top_corridors": {
-        k: round(v, 3)
-        for k, v in list(corridor_risk_lookup.items())[:20]
-        if k != "Non-corridor"
-    },
-    "top_junctions": {
-        k: round(v, 3)
-        for k, v in list(junction_risk_lookup.items())[:20]
-        if str(k) != "nan"
-    },
-    "zone_risk_scores_sorted_desc":    zone_risk_sorted,
-    "zone_closure_counts_sorted_desc": zone_closures_sorted,
-    "temporal_multiplier_by_hour":     {str(k): v for k, v in temporal_mult.items()},
-    "peak_hours":                      data_peak_hours,
-    "resolution_hours_by_cause":       resolution_times,
-    "severity_map":                    severity_map,
-}
-
-print(f"Context built — {len(json.dumps(TRAFFIC_CONTEXT)) // 4} tokens (approx)")
-print("Peak hours:", data_peak_hours)
-# ── CELL C: System prompt + tool schema ──────────────────
-# Instead of asking Qwen to hand-write a JSON block (which we then had to
-# regex out of free text — fragile, and easy to break), we give Qwen a
-# proper *tool*. Qwen decides WHEN to call forecast_event() and WITH WHAT
-# arguments. We run the real Python function ourselves and hand the
-# result back to Qwen, whose only job at that point is to explain it.
-
-EVENT_TYPES = [
-    "vehicle_breakdown", "pot_holes", "road_conditions", "water_logging",
-    "accident", "construction", "public_event", "procession",
-    "political_rally", "vip_movement", "protest",
+KANNADA_HINTS = [
+    "kannada", "ಕನ್ನಡ", "kannadalli", "kannada nalli", "kannadda",
+    "speak kannada", "in kannada", "respond in kannada",
 ]
 
-FORECAST_TOOL = {
+COMPARISON_HINTS = [
+    "compare", "vs", "versus", "difference between", "which is worse",
+    "which is riskier", "better than", "compared to",
+]
+
+RESOURCE_PLANNING_HINTS = [
+    "only have", "limited officers", "limited barricades", "prioritize",
+    "which should i", "can't cover all", "not enough officers",
+    "budget of", "available officers",
+]
+
+BRIEFING_HINTS = [
+    "daily briefing", "today's risk", "todays risk", "morning briefing",
+    "risk summary", "give me a briefing", "watch out for",
+    "overview of risk", "risk overview", "briefing",
+]
+
+
+def _detect_language_request(text: str) -> str | None:
+    """Returns 'kannada' if the user explicitly asked for it, else None.
+    We only switch language on explicit request — never guess from script,
+    since Bengaluru officers code-switch between English/Kannada/Kanglish
+    constantly and guessing wrong is worse than just asking once."""
+    t = text.lower()
+    return "kannada" if any(h in t for h in KANNADA_HINTS) else None
+
+
+def _looks_like_comparison(text: str) -> bool:
+    t = text.lower()
+    return any(h in t for h in COMPARISON_HINTS)
+
+
+def _looks_like_resource_planning(text: str) -> bool:
+    t = text.lower()
+    return any(h in t for h in RESOURCE_PLANNING_HINTS)
+
+
+def _looks_like_briefing_request(text: str) -> bool:
+    t = text.lower()
+    if any(h in t for h in BRIEFING_HINTS):
+        return True
+    # Broader fallback: officers phrase this many different ways
+    # ("what's today's risk look like", "morning risk rundown", etc.)
+    # so also match any time-word + risk-word combination anywhere in
+    # the message rather than relying only on exact phrases above.
+    time_words = ["today", "morning", "daily"]
+    risk_words = ["risk", "briefing", "summary", "rundown", "overview"]
+    return any(tw in t for tw in time_words) and any(rw in t for rw in risk_words)
+
+
+# ── CELL G: Extraction tool for comparison & resource-planning calls ──
+# Qwen needs to be able to propose MULTIPLE forecast_event() calls in one
+# turn for comparison/resource questions. We give it a second tool that
+# wraps a list of event specs, reusing the exact same parameter schema as
+# FORECAST_TOOL so there's only one source of truth for valid arguments.
+
+MULTI_FORECAST_TOOL = {
     "type": "function",
     "function": {
-        "name": "forecast_event",
+        "name": "forecast_multiple_events",
         "description": (
-            "Run the traffic forecasting engine for a real or hypothetical "
-            "road event in Bengaluru and return the predicted congestion "
-            "score, risk level, clearance delay, officers required, "
-            "barricades required, diversion routes and affected corridors."
+            "Run the traffic forecasting engine for TWO OR MORE events at "
+            "once, for comparison or resource-prioritization questions. "
+            "Each event uses the exact same fields as forecast_event."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "event_type": {"type": "string", "enum": EVENT_TYPES},
-                "attendance": {
-                    "type": "integer",
-                    "description": "Crowd size. Use 0 for non-crowd events "
-                                    "(accident, pot_holes, etc). Use 1000 if "
-                                    "a crowd event has no stated attendance.",
-                },
-                "duration_hours": {"type": "number", "description": "Default 2 if unknown."},
-                "corridor": {
-                    "type": "string",
-                    "description": "Match to a name in top_corridors if possible, "
-                                    "else 'Mysore Road'.",
-                },
-                "junction": {
-                    "type": "string",
-                    "description": "Match to a name in top_junctions if possible, "
-                                    "else 'MekhriCircle'.",
-                },
-                "road_closure": {"type": "boolean", "description": "Default false."},
-                "start_hour": {
-                    "type": "integer",
-                    "description": "24h clock, e.g. 18 for 6pm. Default 12 if unknown.",
+                "events": {
+                    "type": "array",
+                    "minItems": 2,
+                    "items": FORECAST_TOOL["function"]["parameters"],
+                    "description": "One entry per event being compared.",
                 },
             },
-            "required": ["event_type"],
+            "required": ["events"],
         },
     },
 }
 
-SYSTEM_PROMPT = f"""You are an AI traffic-management assistant for Bengaluru city police.
 
-You have access to historical risk data derived from 8,173 real Bengaluru
-traffic events:
+# ── CELL H: Extend TrafficChatbot with the 4 new capabilities ──
+# Monkey-patching the existing class keeps this a pure addition — your
+# Cell D class definition doesn't need to be touched or duplicated.
 
-{json.dumps(TRAFFIC_CONTEXT, indent=2)}
-
-When choosing event_type, match the user's wording to these categories
-EXACTLY — do not default to "public_event" unless none of these apply:
-- "rally", "political rally", "party event"        -> political_rally
-- "protest", "demonstration", "strike", "bandh"     -> protest
-- "VIP", "minister", "convoy", "security movement"  -> vip_movement
-- "procession", "yatra", "parade", "march"          -> procession
-- "construction", "roadwork", "digging"             -> construction
-- "accident", "collision", "crash"                  -> accident
-- "water logging", "flooding"                       -> water_logging
-- "pothole"                                         -> pot_holes
-- "vehicle breakdown", "stalled vehicle"             -> vehicle_breakdown
-- "road conditions", "surface damage"               -> road_conditions
-- "festival", "concert", "fair", "exhibition", or any
-  crowd gathering that doesn't match the above      -> public_event
-
-You can handle four kinds of questions:
-...
-"""
-# ── CELL D: Chatbot class ────────────────────────────────
-import re
-import ast
-import inspect
-
-FORECAST_CALL_RE = re.compile(r"forecast_event\s*\((.*?)\)", re.DOTALL)
-
-DATASET_HINTS = [
-    "which corridor", "which zone", "which junction", "highest risk",
-    "most closures", "average", "resolution time", "peak hour", "historical",
-]
-
-# Real parameter order of forecast_event(), used to correctly map
-# POSITIONAL arguments if Qwen writes the call that way instead of using
-# keyword args. Without this, positional calls like
-# forecast_event("political_rally", 5000, 3, "Bellary Road 1", ...)
-# were being silently dropped (only kw.arg-based parsing existed before),
-# so every value fell back to defaults and you'd quietly get a
-# "public_event" / "Mysore Road" / "MekhriCircle" forecast instead of the
-# event actually being asked about.
-FORECAST_PARAM_ORDER = list(inspect.signature(forecast_event).parameters.keys())
+def _run_multi_forecast(self, events: list) -> list:
+    return [self._run_forecast(e) for e in events]
 
 
-class TrafficChatbot:
+def _format_comparison(self, label_a: str, result_a: dict, label_b: str, result_b: dict) -> str:
+    """Diffs two REAL forecast_event() outputs field by field. Every
+    number here came from your trained models / rule engine — nothing
+    is computed by the LLM, the LLM only narrates this table afterward."""
+    def delta(a, b):
+        d = round(b - a, 1)
+        sign = "+" if d > 0 else ""
+        return f"{sign}{d}"
 
-    def __init__(self, api_key: str):
-        self.client = Groq(api_key=api_key)
-        self.history = []
-        print("Chatbot ready. Type your event or question.")
+    lines = [
+        f"{'='*58}",
+        "  SCENARIO COMPARISON",
+        f"{'='*58}",
+        f"  {'Metric':<22}{label_a:>15}{label_b:>15}{'Delta':>8}",
+        f"  {'-'*58}",
+        f"  {'Risk score':<22}{result_a['score']:>15}{result_b['score']:>15}{delta(result_a['score'], result_b['score']):>8}",
+        f"  {'Risk level':<22}{result_a['risk']:>15}{result_b['risk']:>15}",
+        f"  {'Clearance (min)':<22}{result_a['traffic_clearance_min']:>15}{result_b['traffic_clearance_min']:>15}"
+        f"{delta(result_a['traffic_clearance_min'], result_b['traffic_clearance_min']):>8}",
+        f"  {'Officers':<22}{result_a['officers']:>15}{result_b['officers']:>15}"
+        f"{delta(result_a['officers'], result_b['officers']):>8}",
+        f"  {'Barricades':<22}{result_a['barricades']:>15}{result_b['barricades']:>15}"
+        f"{delta(result_a['barricades'], result_b['barricades']):>8}",
+        f"  {'Roads affected':<22}{len(result_a['affected_corridors']):>15}{len(result_b['affected_corridors']):>15}",
+        f"{'='*58}",
+    ]
+    return "\n".join(lines)
 
-    def _call_llm(self, messages, use_tools: bool, force: bool = False):
-        kwargs = dict(
-            model="qwen/qwen3-32b",
-            messages=messages,
-            temperature=0.3,
-            max_tokens=1024,
-            reasoning_format="hidden",  # stop "thinking" text leaking into content
+
+def chat_comparison(self, user_message: str) -> str:
+    """Handles 'compare X vs Y' questions: forces Qwen to use
+    MULTI_FORECAST_TOOL, runs forecast_event() once per scenario, builds
+    a real diff table, then asks Qwen to narrate ONLY that diff table."""
+    self.history.append({"role": "user", "content": user_message})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+
+    response = self.client.chat.completions.create(
+        model="qwen/qwen3-32b",
+        messages=messages,
+        temperature=0.3,
+        max_tokens=1024,
+        reasoning_format="hidden",
+        tools=[MULTI_FORECAST_TOOL],
+        tool_choice="required",
+    )
+    msg = response.choices[0].message
+
+    if not msg.tool_calls:
+        fallback = "I couldn't extract two comparable events from that — try naming both events explicitly, e.g. 'compare a rally with 5000 people vs a protest with 8000 people, both at MekhriCircle.'"
+        self.history.append({"role": "assistant", "content": fallback})
+        return fallback
+
+    try:
+        args = json.loads(msg.tool_calls[0].function.arguments)
+        events = args["events"][:2]  # only ever compare 2 at a time for now
+    except (json.JSONDecodeError, KeyError, IndexError):
+        fallback = "I had trouble parsing the two events to compare — could you restate them one at a time?"
+        self.history.append({"role": "assistant", "content": fallback})
+        return fallback
+
+    results = self._run_multi_forecast(events)
+    label_a = events[0].get("event_type", "Scenario A").replace("_", " ").title()
+    label_b = events[1].get("event_type", "Scenario B").replace("_", " ").title()
+    diff_table = self._format_comparison(label_a, results[0], label_b, results[1])
+
+    narration_prompt = (
+        f"Here is a REAL side-by-side comparison from forecast_event() — "
+        f"the only numbers you're allowed to use:\n```\n{diff_table}\n```\n\n"
+        f"In 3 short sentences (plain text): state which scenario is riskier "
+        f"and by how much, what the officer/barricade gap means operationally, "
+        f"and one concrete recommendation."
+    )
+    explanation_resp = self.client.chat.completions.create(
+        model="qwen/qwen3-32b",
+        messages=[
+            {"role": "system", "content": "You are a concise traffic operations advisor. Reply in exactly 3 sentences, plain text only, in the SAME language the user used in their last message." + self._language_instruction()},
+            {"role": "user", "content": narration_prompt},
+        ],
+        temperature=0.3,
+        max_tokens=300,
+        reasoning_format="hidden",
+    )
+    explanation = explanation_resp.choices[0].message.content
+
+    final = diff_table + "\n\n" + explanation
+    self.history.append({"role": "assistant", "content": final})
+    return final
+
+
+def chat_resource_planning(self, user_message: str) -> str:
+    """Handles 'I only have N officers, which events should I prioritize'
+    questions. Runs forecast_event() for each event mentioned, ranks by
+    score, and greedily allocates against the stated officer cap — pure
+    arithmetic on REAL model outputs, no LLM guessing of priority."""
+    self.history.append({"role": "user", "content": user_message})
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+
+    response = self.client.chat.completions.create(
+        model="qwen/qwen3-32b",
+        messages=messages,
+        temperature=0.3,
+        max_tokens=1024,
+        reasoning_format="hidden",
+        tools=[MULTI_FORECAST_TOOL],
+        tool_choice="required",
+    )
+    msg = response.choices[0].message
+
+    if not msg.tool_calls:
+        fallback = "Tell me the events you're choosing between (type, crowd size, location) and how many officers/barricades you have available."
+        self.history.append({"role": "assistant", "content": fallback})
+        return fallback
+
+    try:
+        args = json.loads(msg.tool_calls[0].function.arguments)
+        events = args["events"]
+    except (json.JSONDecodeError, KeyError):
+        fallback = "I had trouble parsing the events — could you list them one at a time?"
+        self.history.append({"role": "assistant", "content": fallback})
+        return fallback
+
+    # Extract the officer cap from the user's own message via a tiny
+    # regex on digits near "officer" — falls back to None (no cap shown)
+    # if not found, rather than guessing a number.
+    cap_match = re.search(r"(\d+)\s*officers?", user_message, re.IGNORECASE)
+    officer_cap = int(cap_match.group(1)) if cap_match else None
+
+    results = self._run_multi_forecast(events)
+    labeled = [
+        {"label": e.get("event_type", f"Event {i+1}").replace("_", " ").title(), **r}
+        for i, (e, r) in enumerate(zip(events, results))
+    ]
+    # Rank by risk score, highest first — greedy allocation against cap
+    labeled.sort(key=lambda x: x["score"], reverse=True)
+
+    lines = [f"{'='*58}", "  RESOURCE-CONSTRAINED PRIORITIZATION", f"{'='*58}"]
+    if officer_cap:
+        lines.append(f"  Officer budget: {officer_cap}")
+    lines.append("")
+
+    running_total = 0
+    for rank, ev in enumerate(labeled, 1):
+        running_total += ev["officers"]
+        fits = "FITS BUDGET" if (officer_cap is None or running_total <= officer_cap) else "OVER BUDGET"
+        lines.append(
+            f"  #{rank} {ev['label']:<20} score={ev['score']:<6} "
+            f"officers={ev['officers']:<4} running_total={running_total:<5} [{fits}]"
         )
-        if use_tools:
-            kwargs["tools"] = [FORECAST_TOOL]
-            kwargs["tool_choice"] = "required" if force else "auto"
-        return self.client.chat.completions.create(**kwargs)
+    lines.append(f"{'='*58}")
+    plan_table = "\n".join(lines)
 
-    # --- extraction: two independent ways Qwen might hand us parameters ---
+    narration_prompt = (
+        f"Here is a REAL resource-prioritization table — the only numbers "
+        f"you're allowed to use:\n```\n{plan_table}\n```\n\n"
+        f"In 3 short sentences (plain text): say which event(s) should get "
+        f"officers first and why, which (if any) won't fit the budget, and "
+        f"one mitigation for whichever event gets deprioritized."
+    )
+    explanation_resp = self.client.chat.completions.create(
+        model="qwen/qwen3-32b",
+        messages=[
+            {"role": "system", "content": "You are a concise traffic operations advisor. Reply in exactly 3 sentences, plain text only, in the SAME language the user used in their last message." + self._language_instruction()},
+            {"role": "user", "content": narration_prompt},
+        ],
+        temperature=0.3,
+        max_tokens=300,
+        reasoning_format="hidden",
+    )
+    explanation = explanation_resp.choices[0].message.content
 
-    def _params_from_tool_call(self, msg) -> dict | None:
-        if not msg.tool_calls:
-            return None
-        try:
-            return json.loads(msg.tool_calls[0].function.arguments)
-        except (json.JSONDecodeError, IndexError):
-            return None
+    final = plan_table + "\n\n" + explanation
+    self.history.append({"role": "assistant", "content": final})
+    return final
 
-    def _params_from_text_call(self, text: str) -> dict | None:
-        """Catches Qwen writing forecast_event(...) as plain Python-looking
-        text instead of a real tool call. We parse it with ast.literal_eval
-        only (safe — no arbitrary code execution), mapping BOTH positional
-        and keyword arguments using the real function's parameter order,
-        then run the REAL forecast_event() with those args. We never trust
-        numbers Qwen typed, only numbers our own function computed."""
-        match = FORECAST_CALL_RE.search(text or "")
-        if not match:
-            return None
-        try:
-            tree = ast.parse(f"forecast_event({match.group(1)})", mode="eval")
-            call_node = tree.body
-            if not isinstance(call_node, ast.Call):
-                return None
 
-            args = {}
-            # positional args -> map by forecast_event's real signature order
-            for name, node in zip(FORECAST_PARAM_ORDER, call_node.args):
-                args[name] = ast.literal_eval(node)
-            # keyword args override/add on top
-            for kw in call_node.keywords:
-                if kw.arg is not None:
-                    args[kw.arg] = ast.literal_eval(kw.value)
+def chat_briefing(self, hour_window: tuple[int, int] | None = None) -> str:
+    """Proactive daily risk briefing — no hypothetical event needed.
+    Pulls top-3 highest-risk corridors/junctions directly from
+    TRAFFIC_CONTEXT (already sorted descending) and the temporal
+    multiplier for the requested hour window, then asks Qwen to phrase
+    it as a short morning briefing. Pure data lookup, zero forecasting,
+    so this is instant and free of any model uncertainty."""
+    top_corridors = list(TRAFFIC_CONTEXT["top_corridors"].items())[:3]
+    top_junctions = list(TRAFFIC_CONTEXT["top_junctions"].items())[:3]
+    peak_hours = TRAFFIC_CONTEXT["peak_hours"]
 
-            return args or None
-        except Exception:
-            return None
+    window_note = ""
+    if hour_window:
+        start, end = hour_window
+        hours_in_window = [h for h in range(start, end + 1) if h in peak_hours]
+        window_note = f"\nRequested window {start}:00-{end}:00 overlaps peak hours: {hours_in_window or 'none'}"
 
-    def _looks_like_dataset_question(self, text: str) -> bool:
-        t = text.lower()
-        return any(h in t for h in DATASET_HINTS)
+    briefing_data = (
+        f"Top 3 highest-risk corridors today: {top_corridors}\n"
+        f"Top 3 highest-risk junctions today: {top_junctions}\n"
+        f"City-wide peak risk hours: {peak_hours}"
+        f"{window_note}"
+    )
 
-    # --- running the real engine ---
+    prompt = (
+        f"Using ONLY this real historical risk data:\n{briefing_data}\n\n"
+        f"Write a 4-line morning briefing for a traffic control room duty "
+        f"officer. Line 1: greeting + date context. Line 2: top risk "
+        f"corridors to watch. Line 3: top risk junctions. Line 4: peak "
+        f"hours to pre-position resources. Plain text, no markdown."
+    )
+    response = self.client.chat.completions.create(
+        model="qwen/qwen3-32b",
+        messages=[
+            {"role": "system", "content": "You are a traffic control room briefing assistant. Be direct and operational." + self._language_instruction()},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+        max_tokens=300,
+        reasoning_format="hidden",
+    )
+    briefing = response.choices[0].message.content
+    self.history.append({"role": "assistant", "content": briefing})
+    return briefing
 
-    def _run_forecast(self, args: dict) -> dict:
-        return forecast_event(
-            event_type     = args.get("event_type", "public_event"),
-            attendance     = int(args.get("attendance", 0)),
-            duration_hours = float(args.get("duration_hours", 2)),
-            corridor       = args.get("corridor", "Mysore Road"),
-            junction       = args.get("junction", "MekhriCircle"),
-            road_closure   = bool(args.get("road_closure", False)),
-            start_hour     = int(args.get("start_hour", 12)),
+
+def chat_v2(self, user_message: str) -> str:
+    """
+    Drop-in replacement for .chat() that routes to the 4 new capabilities
+    BEFORE falling back to your existing forecast/dataset logic. Call
+    this instead of .chat() to get all upgrades; .chat() itself is left
+    untouched so nothing breaks if you still call it directly somewhere.
+    """
+    lang = _detect_language_request(user_message)
+    if lang == "kannada":
+        self._force_kannada = True  # sticky for the rest of the session
+        confirm = (
+            "Sari, ee mele ella forecast explanations Kannada-nalli "
+            "kodthini. (Got it — I'll explain forecasts in Kannada from "
+            "now on. The numbers themselves never change, only the "
+            "language of the explanation.)"
         )
+        self.history.append({"role": "assistant", "content": confirm})
+        return confirm
 
-    def _format_result(self, result: dict) -> str:
-        n_roads = len(result["affected_corridors"])
-        lines = [
-            f"{'='*52}",
-            "  EVENT IMPACT FORECAST",
-            f"{'='*52}",
-            f"  Event          : {result['event_type'].replace('_', ' ').title()}",
-            f"  Congestion     : {result['score']} / 100  [{result['risk']}]",
-            f"  Clearance time : {result['traffic_clearance_min']} minutes",
-            f"  Officers       : {result['officers']}",
-            f"  Barricades     : {result['barricades']}",
-            f"  Roads affected : {n_roads}",
-            "",
-            "  AFFECTED CORRIDORS:",
-        ]
-        for c in result["affected_corridors"]:
-            lines.append(
-                f"    {c['corridor']:<25} -> {c['delay_min']} min "
-                f"({c['impact_pct']}% impact) [{c['risk_level']}]"
-            )
-        if result["diversion_routes"]:
-            lines.append("")
-            lines.append("  DIVERSION ROUTES:")
-            for r in result["diversion_routes"]:
-                lines.append(f"    {r}")
-        lines.append(f"{'='*52}")
-        return "\n".join(lines)
+    if _looks_like_briefing_request(user_message):
+        return self.chat_briefing()
 
-    def chat(self, user_message: str) -> str:
-        self.history.append({"role": "user", "content": user_message})
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+    if _looks_like_comparison(user_message):
+        return self.chat_comparison(user_message)
 
-        response = self._call_llm(messages, use_tools=True)
-        msg = response.choices[0].message
+    if _looks_like_resource_planning(user_message):
+        return self.chat_resource_planning(user_message)
 
-        params = self._params_from_tool_call(msg) or self._params_from_text_call(msg.content or "")
+    # Fall back to your existing single-forecast / dataset-question logic
+    return self.chat(user_message)
 
-        # Safety net: looked like a forecast question, but we got neither a
-        # real tool call nor a parseable forecast_event(...) text call —
-        # force the model to use the tool properly instead of letting it
-        # free-text an answer it can't back up with real numbers.
-        if params is None and not self._looks_like_dataset_question(user_message):
-            response = self._call_llm(messages, use_tools=True, force=True)
-            msg = response.choices[0].message
-            params = self._params_from_tool_call(msg) or self._params_from_text_call(msg.content or "")
 
-        if params is not None:
-            result = self._run_forecast(params)
-            formatted = self._format_result(result)
+def _language_instruction(self) -> str:
+    """Appended to every narration system prompt when Kannada mode is on.
+    Kept separate from SYSTEM_PROMPT itself so the big TRAFFIC_CONTEXT
+    block never needs to be re-sent in Kannada — only the FINAL
+    explanation text changes language, the tool-calling / extraction
+    step always stays in English since event_type enum values, corridor
+    names etc. must match the dataset exactly regardless of input
+    language."""
+    if getattr(self, "_force_kannada", False):
+        return (
+            " Respond in Kannada (ಕನ್ನಡ script), written naturally as a "
+            "Bengaluru traffic officer would read it. Keep numbers, "
+            "corridor names, and junction names in their original "
+            "English/Latin form since those must match dataset records "
+            "exactly — only the surrounding sentences should be Kannada."
+        )
+    return ""
 
-            self.history.append({"role": "assistant", "content": ""})
-            self.history.append({
-                "role": "user",
-                "content": (
-                    "Here is the REAL forecast_event() output — the only "
-                    "numbers you're allowed to use:\n"
-                    f"```json\n{json.dumps(result, indent=2)}\n```\n\n"
-                    "Using ONLY these numbers (do not invent, round, or add "
-                    "any new figures), give your assessment as 4 short "
-                    "bullet points, each under 20 words:\n"
-                    "- Congestion risk and the main reason for it\n"
-                    "- Officers needed and whether that's high for this kind of event\n"
-                    "- Barricades needed\n"
-                    "- How many roads/corridors are affected and which diversion route to use"
-                ),
-            })
 
-            explanation_resp = self._call_llm(
-                [{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
-                use_tools=False,
-            )
-            explanation = explanation_resp.choices[0].message.content
+TrafficChatbot._language_instruction = _language_instruction
 
-            # clean history: drop the scratch instruction, keep a tidy record
-            self.history.pop()
-            self.history.pop()
-            self.history.append({"role": "assistant", "content": json.dumps(params)})
-            self.history.append({"role": "assistant", "content": explanation})
 
-            return formatted + "\n\n" + explanation
+# Attach all new methods to the existing class without redefining it
+TrafficChatbot._run_multi_forecast = _run_multi_forecast
+TrafficChatbot._format_comparison = _format_comparison
+TrafficChatbot.chat_comparison = chat_comparison
+TrafficChatbot.chat_resource_planning = chat_resource_planning
+TrafficChatbot.chat_briefing = chat_briefing
+TrafficChatbot.chat_v2 = chat_v2
 
-        else:
-            content = msg.content
-            self.history.append({"role": "assistant", "content": content})
-            return content
-
-    def reset(self):
-        self.history = []
-        print("Conversation reset.")
-# ── CELL E: Run chatbot ──────────────────────────────────
-# Add your Groq API key here. Get a free key at https://console.groq.com
-#
-# IMPORTANT: never leave a real key hard-coded in a notebook you share
-# (e.g. on Kaggle/GitHub) — anyone who sees it can use your quota. Prefer
-# Kaggle secrets:
-#   from kaggle_secrets import UserSecretsClient
-#   GROQ_API_KEY = UserSecretsClient().get_secret("GROQ_API_KEY")
-
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-bot = TrafficChatbot(api_key=GROQ_API_KEY)
+print("Chatbot upgraded: comparison mode, resource planning, daily")
+print("briefing, and Kannada-on-request are now available via .chat_v2()")
