@@ -33,7 +33,7 @@ export default function ChatWindow({ onClose }) {
 
     try {
       const response = await axios.post(
-        "http://127.0.0.1:8000/chat",
+        "https://traffic-ai-backend-36vm.onrender.com/chat",
         { message }
       );
 
