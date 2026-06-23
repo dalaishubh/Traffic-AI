@@ -748,7 +748,9 @@ const DashboardPage = () => {
       {/* Floating chatbot assistant integration */}
       <div className="fixed bottom-6 right-6 z-50">
         <ChatButton onClick={() => setChatOpen(!chatOpen)} isOpen={chatOpen} />
-        {chatOpen && <ChatWindow onClose={() => setChatOpen(false)} />}
+        <div className={chatOpen ? "block" : "hidden"}>
+          <ChatWindow onClose={() => setChatOpen(false)} />
+        </div>
       </div>
     </div>
   );

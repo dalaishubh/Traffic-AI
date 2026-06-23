@@ -56,9 +56,10 @@ const ForecastForm = () => {
     }
     setError('');
     
+    const isAttendanceRequired = ['public_event', 'protest', 'political_rally', 'procession', 'vip_movement'].includes(eventType);
     const formData = {
       event_type: eventType,
-      attendance: Number(attendance),
+      attendance: isAttendanceRequired ? Number(attendance) : 0,
       duration_hours: Number(duration),
       corridor: selectedCorridor,
       junction: selectedJunction,
@@ -109,10 +110,12 @@ const ForecastForm = () => {
             ))}
           </select>
         </div>
-        <div>
-          <label className="kpi-label">Expected attendance</label>
-          <input type="number" min="0" value={attendance} onChange={(e) => setAttendance(e.target.value)} className="input-field mt-1.5" />
-        </div>
+        {['public_event', 'protest', 'political_rally', 'procession', 'vip_movement'].includes(eventType) && (
+          <div>
+            <label className="kpi-label">Expected attendance</label>
+            <input type="number" min="0" value={attendance} onChange={(e) => setAttendance(e.target.value)} className="input-field mt-1.5" />
+          </div>
+        )}
         <div>
           <label className="kpi-label">Duration (hours)</label>
           <input type="number" min="1" max="24" value={duration} onChange={(e) => setDuration(e.target.value)} className="input-field mt-1.5" />

@@ -655,6 +655,12 @@ def forecast_event(event_type, attendance, duration_hours, corridor, junction,
     if event_type not in severity_map:
         event_type = "others"
 
+    attendance_requiring_types = {
+        "public_event", "protest", "political_rally", "procession", "vip_movement"
+    }
+    if event_type not in attendance_requiring_types:
+        attendance = 0
+
     severity = severity_map.get(event_type, 3)
     score = predict_delay(attendance, duration_hours, corridor, junction,
                            road_closure, start_hour, severity, event_type)

@@ -5,9 +5,19 @@ import { FiSend, FiX, FiMessageSquare } from "react-icons/fi";
 
 export default function ChatWindow({ onClose }) {
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState([
-    { sender: "bot", text: "hello what you want to know in bangalore traffic?" }
-  ]);
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem("chat_messages");
+      return saved ? JSON.parse(saved) : [
+        { sender: "bot", text: "hello what you want to know in bangalore traffic?" }
+      ];
+    } catch (err) {
+      console.error("Error loading chat messages from localStorage:", err);
+      return [
+        { sender: "bot", text: "hello what you want to know in bangalore traffic?" }
+      ];
+    }
+  });
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
 
@@ -16,34 +26,45 @@ export default function ChatWindow({ onClose }) {
   };
 
   useEffect(() => {
+    localStorage.setItem("chat_messages", JSON.stringify(messages));
     scrollToBottom();
   }, [messages]);
 
   const sendMessage = async () => {
     if (!message.trim() || loading) return;
 
+    const currentMsg = message;
     const userMessage = {
       sender: "user",
-      text: message,
+      text: currentMsg,
     };
 
     setMessages((prev) => [...prev, userMessage]);
     setMessage("");
     setLoading(true);
 
+    const isReset = ["reset", "restart", "clear"].includes(currentMsg.trim().toLowerCase());
+
     try {
       const response = await axios.post(
-        "https://traffic-ai-backend-36vm.onrender.com/chat",
-        { message }
+        "http://127.0.0.1:8000/chat",
+        { message: currentMsg }
       );
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: "bot",
-          text: response.data.answer,
-        },
-      ]);
+      if (isReset) {
+        setMessages([
+          { sender: "bot", text: "Conversation reset. Hello! What would you like to know about Bangalore traffic?" }
+        ]);
+        localStorage.removeItem("chat_messages");
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            sender: "bot",
+            text: response.data.answer,
+          },
+        ]);
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
