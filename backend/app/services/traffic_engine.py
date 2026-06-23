@@ -722,6 +722,10 @@ def forecast_event(event_type, attendance, duration_hours, corridor, junction,
             "latitude": incident_loc.get("latitude", 12.9716),
             "longitude": incident_loc.get("longitude", 77.5946),
         },
+        "attendance": attendance,
+        "road_closure": road_closure,
+        "start_hour": start_hour,
+        "junction": junction,
     }
 
 

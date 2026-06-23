@@ -158,7 +158,10 @@ KANNADA_HINTS = [
 
 COMPARISON_HINTS = [
     "compare", "vs", "versus", "difference between", "which is worse",
-    "which is riskier", "better than", "compared to",
+    "which is riskier", "better than", "compared to", "more important than",
+    "more critical than", "higher risk than", "worse than", "is that more",
+    "is it more", "than this", "than the current", "than the active",
+    "than the dashboard", "comparison", "priority between", "prioritize between",
 ]
 
 RESOURCE_PLANNING_HINTS = [
@@ -330,21 +333,16 @@ Affected Corridors
             return f"{sign}{d}"
 
         lines = [
-            f"{'='*58}",
-            "  SCENARIO COMPARISON",
-            f"{'='*58}",
-            f"  {'Metric':<22}{label_a:>15}{label_b:>15}{'Delta':>8}",
-            f"  {'-'*58}",
-            f"  {'Risk score':<22}{result_a['score']:>15}{result_b['score']:>15}{delta(result_a['score'], result_b['score']):>8}",
-            f"  {'Risk level':<22}{result_a['risk']:>15}{result_b['risk']:>15}",
-            f"  {'Clearance (min)':<22}{result_a['traffic_clearance_min']:>15}{result_b['traffic_clearance_min']:>15}"
-            f"{delta(result_a['traffic_clearance_min'], result_b['traffic_clearance_min']):>8}",
-            f"  {'Officers':<22}{result_a['officers']:>15}{result_b['officers']:>15}"
-            f"{delta(result_a['officers'], result_b['officers']):>8}",
-            f"  {'Barricades':<22}{result_a['barricades']:>15}{result_b['barricades']:>15}"
-            f"{delta(result_a['barricades'], result_b['barricades']):>8}",
-            f"  {'Roads affected':<22}{len(result_a['affected_corridors']):>15}{len(result_b['affected_corridors']):>15}",
-            f"{'='*58}",
+            "### 📊 Scenario Comparison",
+            "",
+            f"| Metric | {label_a} | {label_b} | Delta |",
+            "| :--- | :---: | :---: | :---: |",
+            f"| **Risk Score** | {result_a['score']} | {result_b['score']} | {delta(result_a['score'], result_b['score'])} |",
+            f"| **Risk Level** | {result_a['risk']} | {result_b['risk']} | — |",
+            f"| **Clearance (min)** | {result_a['traffic_clearance_min']} | {result_b['traffic_clearance_min']} | {delta(result_a['traffic_clearance_min'], result_b['traffic_clearance_min'])} |",
+            f"| **Officers** | {result_a['officers']} | {result_b['officers']} | {delta(result_a['officers'], result_b['officers'])} |",
+            f"| **Barricades** | {result_a['barricades']} | {result_b['barricades']} | {delta(result_a['barricades'], result_b['barricades'])} |",
+            f"| **Roads Affected** | {len(result_a['affected_corridors'])} | {len(result_b['affected_corridors'])} | {delta(len(result_a['affected_corridors']), len(result_b['affected_corridors']))} |",
         ]
         return "\n".join(lines)
 
@@ -363,7 +361,20 @@ Affected Corridors
         if not self.client:
             return "Groq client is not initialized."
         self.history.append({"role": "user", "content": user_message})
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+        
+        system_content = SYSTEM_PROMPT
+        if self.active_simulation:
+            system_content += f"\n\nACTIVE DASHBOARD SIMULATION RESULT:\n"
+            system_content += f"```json\n{json.dumps(self.active_simulation, indent=2)}\n```\n"
+            system_content += (
+                "\nCRITICAL: The user has currently run the above simulation on their dashboard. "
+                "If the user is asking to compare a new scenario or event to 'this', 'the active event', "
+                "'the current event', or 'the dashboard', you must call `forecast_multiple_events` with "
+                "two events in the 'events' array: "
+                "1. The active simulation reconstructed using its parameters (event_type, attendance, corridor, junction, road_closure, start_hour, duration_hours). "
+                "2. The new scenario/event from the user's message."
+            )
+        messages = [{"role": "system", "content": system_content}] + self.history
 
         try:
             response = self._call_llm(messages, use_tools=True, multiple=True)
@@ -396,19 +407,22 @@ Affected Corridors
             f"Here is a side-by-side comparison from forecast_event():\n"
             f"Scenario A data:\n```json\n{json.dumps(results[0], indent=2)}\n```\n\n"
             f"Scenario B data:\n```json\n{json.dumps(results[1], indent=2)}\n```\n\n"
-            f"Please write a comprehensive, professional, and detailed operations comparison/explanation. "
-            "You must address the following five areas explicitly:\n"
-            "1. **Explainable Delay Prediction**: Differentiate how the delays are calculated/broken down between the two scenarios (referencing the `delay_breakdown` field in both JSONs).\n"
-            "2. **Historical Evidence for Corridor Selection**: Detail why these corridors/junctions were selected as affected, referencing the historical risk levels or closure rates from the context database.\n"
-            "3. **AI Confidence Scores**: State the AI confidence percentage for both predictions and compare their reliability.\n"
-            "4. **Command-Center Recommendations**: Outline the comparative priorities, recommended actions, deployment strategy, and expected improvements for both cases.\n"
-            "5. **Resource Planning**: Advise how operators should budget/deploy resources between the two scenarios."
+            "Please write a highly concise, to-the-point operations comparison. "
+            "Avoid wordiness and keep descriptions extremely short. "
+            "Use clear, single-sentence bullet points to compare Scenario A and B under each heading. "
+            "Provide solid operational justification for your answers based on the metrics. "
+            "Address these five areas explicitly:\n"
+            "1. **Explainable Delay Prediction**: Compare delay calculations/breakdowns between the two (from `delay_breakdown` field).\n"
+            "2. **Historical Evidence for Corridor Selection**: Compare corridor/junction selections using historical risk levels or closure rates.\n"
+            "3. **AI Confidence Scores**: Compare prediction confidence percentages (ML risk confidence or ML closure probability).\n"
+            "4. **Command-Center Recommendations**: Differentiate operational priorities, recommended actions, and expected improvements.\n"
+            "5. **Resource Planning**: Differentiate resource budgets/deployments between the two scenarios."
         )
         try:
             explanation_resp = self.client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "You are a concise traffic operations advisor. Reply professionally and in detail, in the SAME language the user used in their last message." + self._language_instruction()},
+                    {"role": "system", "content": "You are a highly concise traffic operations advisor. Respond directly and briefly with minimal wordiness. Keep the description under each section to 1 or 2 concise bullet points at most, in the SAME language the user used in their last message." + self._language_instruction()},
                     {"role": "user", "content": narration_prompt},
                 ],
                 temperature=0.3,
@@ -426,7 +440,12 @@ Affected Corridors
         if not self.client:
             return "Groq client is not initialized."
         self.history.append({"role": "user", "content": user_message})
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + self.history
+        
+        system_content = SYSTEM_PROMPT
+        if self.active_simulation:
+            system_content += f"\n\nACTIVE DASHBOARD SIMULATION RESULT:\n"
+            system_content += f"```json\n{json.dumps(self.active_simulation, indent=2)}\n```\n"
+        messages = [{"role": "system", "content": system_content}] + self.history
 
         try:
             response = self._call_llm(messages, use_tools=True, multiple=True)
@@ -467,12 +486,23 @@ Affected Corridors
         # Rank by risk score, highest first — greedy allocation against cap
         labeled.sort(key=lambda x: x["score"], reverse=True)
 
-        lines = [f"{'='*58}", "  RESOURCE-CONSTRAINED PRIORITIZATION", f"{'='*58}"]
-        if officer_cap:
-            lines.append(f"  Officer budget: {officer_cap}")
-        if barricade_cap:
-            lines.append(f"  Barricade budget: {barricade_cap}")
-        lines.append("")
+        lines = [
+            "### ⚖️ Resource-Constrained Prioritization",
+            ""
+        ]
+        if officer_cap or barricade_cap:
+            budget_notes = []
+            if officer_cap:
+                budget_notes.append(f"**Officer Budget**: {officer_cap}")
+            if barricade_cap:
+                budget_notes.append(f"**Barricade Budget**: {barricade_cap}")
+            lines.append(" &middot; ".join(budget_notes))
+            lines.append("")
+
+        lines.extend([
+            "| Rank | Event | Risk Score | Officers | Barricades | Status |",
+            "| :---: | :--- | :---: | :---: | :---: | :---: |"
+        ])
 
         running_officers = 0
         running_barricades = 0
@@ -482,31 +512,32 @@ Affected Corridors
             
             fits_officers = (officer_cap is None or running_officers <= officer_cap)
             fits_barricades = (barricade_cap is None or running_barricades <= barricade_cap)
-            fits = "FITS BUDGET" if (fits_officers and fits_barricades) else "OVER BUDGET"
+            fits = "🟢 Fits Budget" if (fits_officers and fits_barricades) else "🔴 Over Budget"
             
             lines.append(
-                f"  #{rank} {ev['label']:<20} score={ev['score']:<6} "
-                f"officers={ev['officers']:<4} barricades={ev['barricades']:<4} [{fits}]"
+                f"| #{rank} | {ev['label']} | {ev['score']} | {ev['officers']} | {ev['barricades']} | {fits} |"
             )
-        lines.append(f"{'='*58}")
         plan_table = "\n".join(lines)
 
         narration_prompt = (
             f"Here is a resource-constrained prioritization table:\n```\n{plan_table}\n```\n\n"
             f"Event details:\n```json\n{json.dumps(results, indent=2)}\n```\n\n"
-            f"Please write a comprehensive, professional, and detailed resource planning explanation. "
-            "You must address the following five areas explicitly:\n"
-            "1. **Resource-Constrained Planning**: Explain which event(s) fit within the user's specified budget and which are over-budget, giving a clear prioritization sequence.\n"
-            "2. **Explainable Delay Prediction**: Detail the delay breakdown for the top-priority event (base delay, crowd size, duration, road closure, and congestion score impacts from the `delay_breakdown` field in the JSON).\n"
-            "3. **Historical Evidence for Corridor Selection**: Detail why those corridors were selected as affected, referencing the historical risk levels or closure rates from the context database.\n"
-            "4. **AI Confidence Scores**: State the AI confidence percentage for the predictions and compare their reliability.\n"
-            "5. **Command-Center Recommendations**: Outline the recommended priority level, mitigation actions, and expected delay reduction for the events."
+            "Please write a highly concise, to-the-point resource planning explanation. "
+            "Avoid wordiness and keep descriptions extremely short. "
+            "Use clear, single-sentence bullet points for each heading. "
+            "Provide solid operational justification based on the table and metrics. "
+            "Address these five areas explicitly:\n"
+            "1. **Resource-Constrained Planning**: Explain prioritization and budget fit (which events fit vs exceed limits).\n"
+            "2. **Explainable Delay Prediction**: Briefly detail the delay breakdown for the top-priority event (from `delay_breakdown` field).\n"
+            "3. **Historical Evidence for Corridor Selection**: Explain corridor selections using historical risk levels/closure rates.\n"
+            "4. **AI Confidence Scores**: State prediction confidence percentages.\n"
+            "5. **Command-Center Recommendations**: Detail recommended actions, priorities, and expected delay reductions."
         )
         try:
             explanation_resp = self.client.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
-                    {"role": "system", "content": "You are a concise traffic operations advisor. Reply professionally and in detail, in the SAME language the user used in their last message." + self._language_instruction()},
+                    {"role": "system", "content": "You are a highly concise traffic operations advisor. Respond directly and briefly with minimal wordiness. Keep the description under each section to 1 or 2 concise bullet points at most, in the SAME language the user used in their last message." + self._language_instruction()},
                     {"role": "user", "content": narration_prompt},
                 ],
                 temperature=0.3,
@@ -647,13 +678,16 @@ Affected Corridors
             explanation_prompt = (
                 "Here is the REAL forecast_event() output — the only numbers you're allowed to use:\n"
                 f"```json\n{json.dumps(result, indent=2)}\n```\n\n"
-                "Please write a comprehensive, professional, and detailed operations briefing/explanation. "
-                "You must address the following five areas explicitly:\n"
-                "1. **Explainable Delay Prediction**: Explain exactly how the delay is calculated and broken down (using the base delay, crowd size, duration, road closure, and congestion score impacts from the `delay_breakdown` field in the JSON).\n"
-                "2. **Historical Evidence for Corridor Selection**: Detail why this corridor and adjacent corridors were selected, referencing the historical risk levels or closure rates from the context database.\n"
-                "3. **AI Confidence Scores**: State the AI confidence percentage (found in the `confidence` / `ml_risk_confidence` or `ml_closure_probability` fields in the JSON) and what it means for prediction reliability.\n"
-                "4. **Command-Center Recommendations**: Outline the operational priority level, recommended mitigation actions, resource deployment plan, and estimated improvement percentage based on the strategy recommendations.\n"
-                "5. **Resource Planning**: Provide insights on how these resources compare to typical operations and tips for resource management."
+                "Please write a highly concise, to-the-point operations briefing. "
+                "Avoid wordiness and keep descriptions extremely short. "
+                "Use clear, single-sentence bullet points for each heading. "
+                "Provide solid operational justification based on the metrics. "
+                "Address these five areas explicitly:\n"
+                "1. **Explainable Delay Prediction**: Explain how the delay is calculated and broken down (from `delay_breakdown` field).\n"
+                "2. **Historical Evidence for Corridor Selection**: Explain why this corridor and adjacent corridors were selected using historical risk levels/closure rates.\n"
+                "3. **AI Confidence Scores**: State the prediction confidence percentage and its reliability.\n"
+                "4. **Command-Center Recommendations**: Outline the priority level, actions, deployment, and expected improvement.\n"
+                "5. **Resource Planning**: Provide brief insights on resource numbers compared to standard deployments."
             )
 
             self.history.append({
@@ -662,8 +696,12 @@ Affected Corridors
             })
 
             try:
+                concise_system = (
+                    "You are a highly concise traffic operations advisor. Respond directly and briefly with minimal wordiness. "
+                    "Keep the description under each section to 1 or 2 concise bullet points at most.\n\n"
+                ) + system_content + self._language_instruction()
                 explanation_resp = self._call_llm(
-                    [{"role": "system", "content": system_content + self._language_instruction()}] + self.history,
+                    [{"role": "system", "content": concise_system}] + self.history,
                     use_tools=False,
                 )
                 explanation = explanation_resp.choices[0].message.content
