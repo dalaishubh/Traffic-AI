@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, Link } from 'react-router-dom';
-import { FiMoon, FiSun, FiActivity } from 'react-icons/fi';
+import { FiMoon, FiSun } from 'react-icons/fi';
 import { checkBackendStatus } from '../services/api';
 import { useTheme } from '../context/ThemeContext';
 
@@ -31,9 +31,7 @@ const MainLayout = () => {
       <header className="sticky top-0 z-40 bg-surface/90 backdrop-blur border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 grid grid-cols-[minmax(0,1fr)_auto] sm:flex sm:items-center sm:justify-between items-center gap-4">
           <Link to="/" className="flex min-w-0 items-center gap-2.5 shrink-0">
-            <span className="inline-flex items-center justify-center w-8 h-8 rounded-md bg-primary text-primary-fg shrink-0">
-              <FiActivity className="w-4 h-4" />
-            </span>
+            <img src="/logo.jpg" alt="Traffic-AI Logo" className="w-8 h-8 rounded-md object-cover shrink-0" />
             <span className="font-display font-bold text-[15px] tracking-tight truncate">
               Urban Traffic Digital Twin
             </span>
